@@ -8,6 +8,9 @@ struct ClipCardView: View {
     var justCopied: Bool
     /// Set only for items that fit in a QR code (URLs and short text).
     var onShowQR: (() -> Void)?
+    /// Non-nil while this card's title is being edited.
+    var renameText: Binding<String>?
+    var onRenameCommit: () -> Void = {}
     private let hovering = State(initialValue: false) // @State is a macro; CLT lacks its plugin
 
     static let size = CGSize(width: 216, height: 244)
@@ -77,7 +80,17 @@ struct ClipCardView: View {
     private var header: some View {
         HStack(spacing: 8) {
             VStack(alignment: .leading, spacing: 1) {
-                Text(title).font(.system(size: 13, weight: .bold))
+                if let renameText {
+                    TextField(defaultTitle, text: renameText)
+                        .textFieldStyle(.plain)
+                        .font(.system(size: 13, weight: .bold))
+                        .padding(.horizontal, 4).padding(.vertical, 1)
+                        .background(.white.opacity(0.25), in: RoundedRectangle(cornerRadius: 4))
+                        .onSubmit(onRenameCommit)
+                        .accessibilityIdentifier("cardRenameField")
+                } else {
+                    Text(item.title ?? defaultTitle).font(.system(size: 13, weight: .bold)).lineLimit(1)
+                }
                 Text(item.createdAt, format: .relative(presentation: .named))
                     .font(.system(size: 10.5))
                     .opacity(0.85)
@@ -94,7 +107,9 @@ struct ClipCardView: View {
         .background(accent.gradient)
     }
 
-    private var title: String {
+    private var defaultTitle: String { Self.defaultTitle(for: item) }
+
+    static func defaultTitle(for item: ClipItem) -> String {
         switch item.kind {
         case .text: "Text"
         case .url: "Link"

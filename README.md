@@ -31,7 +31,7 @@
 | **Search and filter** | Search all text, links and file names; filter by Text, Links, Images, Files |
 | **Keyboard first** | ← → to move between cards, Return to paste, start typing to search, Esc to close |
 | **Click to copy** | Click a card to put it back on the clipboard, or turn on **auto-paste** |
-| **Pin** | Pinned items get their own tab; pinned and categorized items are never cleaned up |
+| **Pin and rename** | Pinned items get their own tab; give any card, like a screenshot, its own name; pinned and categorized items are never cleaned up |
 | **Instant QR Share** | Hover a link or short text and click the QR button to scan it with your phone |
 | **Privacy** | Ignores password managers, plus any apps you add; **Pause** capture; auto-delete after a day, week or month |
 | **Settings** | Custom shortcut, history size (100 to 2,500), launch at login |
@@ -77,10 +77,11 @@ defaults delete com.omid.clipstack
 | Open the shelf | Press **⇧⌘V** anywhere, or choose **Open ClipStack** from the menu bar icon |
 | Move between cards | **←** **→** |
 | Copy an item | Click its card, or select it and press **Return** |
-| Pin, delete, show QR | Right-click a card |
+| Pin, rename, delete, show QR | Right-click a card |
 | Make a category | Click **+** in the top bar, type a name and pick a color |
 | Add to a category | Drag the card onto the category, or right-click it → **Category** |
 | Use a card in another app | Drag it out of the shelf |
+| Change a category's color | Click its colored dot and pick a swatch |
 | Rename, recolor or delete a category | Right-click its tab |
 | QR code | Hover a link or short-text card and click the QR button in its corner |
 | Close the shelf | **Esc**, or click outside it |

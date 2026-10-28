@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.2.3
+
+- Rename any card (right-click → Rename…); names show in the card header and are searchable
+- Click a category's dot to change its color from swatches
+- Fixed: dragging a screenshot or file card onto a category didn't add it
+- Existing history is migrated automatically to store card names
+
 ## 0.2.2
 
 - Drag a card onto a category to add it

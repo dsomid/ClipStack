@@ -178,6 +178,7 @@ final class ClipStore: @unchecked Sendable {
             if let keeper = keepers[item.contentHash] {
                 // Keep the newest copy; pinned or categorized anywhere carries over.
                 keeper.isPinned = keeper.isPinned || item.isPinned
+                if keeper.title == nil { keeper.title = item.title }
                 keeper.mutableSetValue(forKey: "categories").union(item.categories as? Set<AnyHashable> ?? [])
                 context.delete(item)
             } else {

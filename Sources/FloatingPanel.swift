@@ -97,7 +97,7 @@ final class PanelController {
                         DispatchQueue.main.async {
                             guard self.isShown else { return }
                             self.panel.makeKey()
-                            if self.model.categoryDraft != nil { self.focusTextField(placeholder: "Category name") }
+                            self.focusEditingField()
                         }
                     }
                 }
@@ -106,25 +106,44 @@ final class PanelController {
         // SwiftUI's focus request is lost when the field appears while a context menu
         // still holds focus (and menu actions run after the menu closes), so focus the
         // name field directly whenever a draft starts.
-        draftObserver = model.$categoryDraft
-            .map { $0 != nil }
-            .removeDuplicates()
+        draftObserver = model.$categoryDraft.map { $0 != nil }
+            .merge(with: model.$renaming.map { $0 != nil })
             .filter { $0 }
             .sink { [weak self] _ in
-                DispatchQueue.main.asyncAfter(deadline: .now() + 0.05) {
-                    self?.focusTextField(placeholder: "Category name")
-                }
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.05) { self?.focusEditingField() }
             }
     }
 
-    private func focusTextField(placeholder: String) {
-        func find(_ view: NSView) -> NSTextField? {
-            if let field = view as? NSTextField, field.isEditable, field.placeholderString == placeholder { return field }
-            return view.subviews.lazy.compactMap(find).first
+    /// Focuses the card-title or category-name field, whichever is open. Retries for a
+    /// moment because the card row can rebuild (and replace the field) right after it appears.
+    private func focusEditingField(attempt: Int = 0) {
+        let matches: (NSTextField) -> Bool
+        if let item = model.renaming {
+            let placeholder = ClipCardView.defaultTitle(for: item)
+            matches = { $0.placeholderString == placeholder }
+        } else if model.categoryDraft != nil {
+            matches = { $0.placeholderString == "Category name" }
+        } else {
+            return
         }
-        guard let content = panel.contentView, let field = find(content) else { return }
+        if focusTextField(where: matches) || attempt >= 8 { return }
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.08) { [weak self] in
+            self?.focusEditingField(attempt: attempt + 1)
+        }
+    }
+
+    /// Returns true once a matching field has keyboard focus.
+    private func focusTextField(where matches: (NSTextField) -> Bool) -> Bool {
+        func find(_ view: NSView) -> NSTextField? {
+            if let field = view as? NSTextField, field.isEditable, matches(field) { return field }
+            for subview in view.subviews { if let field = find(subview) { return field } }
+            return nil
+        }
+        guard let content = panel.contentView, let field = find(content) else { return false }
+        if field.currentEditor() != nil { return true }
         panel.makeFirstResponder(field)
         field.currentEditor()?.selectedRange = NSRange(location: field.stringValue.count, length: 0)
+        return false // confirm on the next attempt that focus stuck
     }
 
     /// Losing key status used to close the shelf, but a context menu or a drag in a
@@ -249,12 +268,14 @@ final class PanelController {
         switch event.keyCode {
         case 53: // Esc
             if model.qrItem != nil { model.qrItem = nil }
+            else if model.renaming != nil { model.renaming = nil }
+            else if model.recoloring != nil { model.recoloring = nil }
             else if model.categoryDraft != nil { model.categoryDraft = nil }
             else if model.searchActive { model.closeSearch() }
             else { hide() }
             return true
-        case _ where model.categoryDraft != nil:
-            return false // typing a category name
+        case _ where model.categoryDraft != nil || model.renaming != nil:
+            return false // typing a name
         case 123: // ←
             model.moveSelection(by: -1)
             return true

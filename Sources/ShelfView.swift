@@ -65,6 +65,11 @@ final class ShelfModel: ObservableObject {
     @Published var selectedIndex = 0
     @Published var copiedID: NSManagedObjectID?
     @Published var qrItem: ClipItem?
+    /// The card whose title is being edited in its header.
+    @Published var renaming: ClipItem?
+    @Published var renameText = ""
+    /// The category whose color swatches are showing (opened by clicking its dot).
+    @Published var recoloring: ClipCategory?
     /// Non-nil while the inline category name field is showing.
     @Published var categoryDraft: CategoryDraft?
     @Published var focusSearch = 0
@@ -113,6 +118,8 @@ final class ShelfModel: ObservableObject {
         selectedIndex = 0
         qrItem = nil
         categoryDraft = nil
+        renaming = nil
+        recoloring = nil
         focusSearch += 1
     }
 
@@ -128,6 +135,20 @@ final class ShelfModel: ObservableObject {
             try? await Task.sleep(for: .seconds(0.5))
             if copiedID == item.objectID { copiedID = nil }
         }
+    }
+
+    func startRename(_ item: ClipItem) {
+        renameText = item.title ?? ""
+        renaming = item
+    }
+
+    /// An empty name goes back to the default title for the card's type.
+    func commitRename() {
+        guard let item = renaming else { return }
+        renaming = nil
+        let name = renameText.trimmingCharacters(in: .whitespacesAndNewlines)
+        item.title = name.isEmpty ? nil : name
+        try? item.managedObjectContext?.save()
     }
 
     func commitCategoryDraft(in context: NSManagedObjectContext) {
@@ -152,6 +173,38 @@ final class ShelfModel: ObservableObject {
     static func nextColor(in context: NSManagedObjectContext) -> Int16 {
         let count = (try? context.count(for: ClipCategory.fetchRequest())) ?? 0
         return Int16(count % ClipCategory.palette.count)
+    }
+
+    /// The card being dragged, and the drag pasteboard's change count for that drag, so a
+    /// drop on a category tab doesn't depend on which types survive the drag pasteboard
+    /// (an image or file card's own type can be dropped in favor of PNG or a file URL).
+    private var dragged: (item: ClipItem, changeCount: Int)?
+
+    func dragStarted(_ item: ClipItem) -> NSItemProvider {
+        let provider = CardDrag.provider(for: item)
+        dragged = (item, -1)
+        // The provider is written to the drag pasteboard after this returns.
+        DispatchQueue.main.async { [weak self] in
+            guard let self, self.dragged?.item == item else { return }
+            self.dragged?.changeCount = NSPasteboard(name: .drag).changeCount
+        }
+        return provider
+    }
+
+    /// Handles a drop on a category tab: our own card if it's the drag in progress,
+    /// else a card identified by its object-ID payload. Other drops are rejected.
+    func handleDrop(_ providers: [NSItemProvider], on category: ClipCategory) -> Bool {
+        if let dragged, NSPasteboard(name: .drag).changeCount == dragged.changeCount {
+            self.dragged = nil
+            add(dragged.item, to: category)
+            return true
+        }
+        return CardDrag.loadURI(from: providers) { [weak self] uri in self?.addDroppedItem(uri, to: category) }
+    }
+
+    private func add(_ item: ClipItem, to category: ClipCategory) {
+        if !item.isIn(category) { item.toggle(category) }
+        try? category.managedObjectContext?.save()
     }
 
     /// Adds a card dropped on a category tab. Returns false if the drop wasn't one of our cards.
@@ -222,10 +275,14 @@ private struct ShelfBar: View {
                         } else {
                             Tab(title: category.name, color: category.color,
                                 selected: model.tab == .category(category.objectID),
-                                onDropItem: { model.addDroppedItem($0, to: category) }) {
+                                onDrop: { model.handleDrop($0, on: category) },
+                                onColorTap: { model.recoloring = model.recoloring == category ? nil : category }) {
                                 model.tab = .category(category.objectID)
                             }
                             .contextMenu { categoryMenu(category) }
+                            if model.recoloring == category {
+                                recolorSwatches(category)
+                            }
                         }
                     }
                     if let draft = model.categoryDraft, draft.editing == nil {
@@ -332,6 +389,32 @@ private struct ShelfBar: View {
 
     /// Swatches shown beside the name field. Plain SwiftUI buttons, since a menu or
     /// popover would take key status from the shelf and close it.
+    /// Swatches beside a tab after clicking its dot; picking one recolors it right away.
+    private func recolorSwatches(_ category: ClipCategory) -> some View {
+        HStack(spacing: 5) {
+            ForEach(ClipCategory.palette.indices, id: \.self) { option in
+                Button {
+                    category.colorIndex = Int16(option)
+                    try? context.save()
+                    model.recoloring = nil
+                } label: {
+                    Circle()
+                        .fill(ClipCategory.palette[option])
+                        .frame(width: 14, height: 14)
+                        .padding(2)
+                        .overlay(Circle().strokeBorder(Color.primary.opacity(option == Int(category.colorIndex) ? 0.9 : 0), lineWidth: 1.5))
+                        .contentShape(Circle())
+                }
+                .buttonStyle(.plain)
+                .help(Self.colorNames[option])
+            }
+        }
+        .padding(.horizontal, 8)
+        .frame(height: 34)
+        .background(Color.primary.opacity(0.08), in: RoundedRectangle(cornerRadius: 8))
+        .transition(.scale(scale: 0.8, anchor: .leading).combined(with: .opacity))
+    }
+
     private var draftColorSwatches: some View {
         HStack(spacing: 5) {
             ForEach(ClipCategory.palette.indices, id: \.self) { option in
@@ -381,17 +464,22 @@ private struct Tab: View {
     var color: Color?
     let selected: Bool
     /// Set on category tabs so cards can be dropped onto them.
-    var onDropItem: ((String) -> Bool)?
+    var onDrop: (([NSItemProvider]) -> Bool)?
+    /// Set on category tabs: clicking the dot opens the color swatches.
+    var onColorTap: (() -> Void)?
     let action: () -> Void
     private let targeted = State(initialValue: false) // @State is a macro; CLT lacks its plugin
 
     var body: some View {
         let highlight = targeted.wrappedValue ? (color ?? .accentColor).opacity(0.35)
             : selected ? Color.primary.opacity(0.14) : .clear
-        Button(action: action) {
-            HStack(spacing: 8) {
+        // Tap gestures rather than a Button so the dot can have its own (inner) tap.
+        HStack(spacing: 8) {
                 if let color {
                     Circle().fill(color).frame(width: 14, height: 14)
+                        .padding(4).contentShape(Circle()).padding(-4)
+                        .onTapGesture { (onColorTap ?? action)() }
+                        .help(onColorTap == nil ? "" : "Change color")
                 } else if let systemImage {
                     Image(systemName: systemImage).font(.system(size: 15))
                 }
@@ -403,13 +491,12 @@ private struct Tab: View {
             .frame(height: 34)
             .background(highlight, in: RoundedRectangle(cornerRadius: 8))
             .contentShape(RoundedRectangle(cornerRadius: 8))
-        }
-        .buttonStyle(.plain)
+            .onTapGesture(perform: action)
         .scaleEffect(targeted.wrappedValue ? 1.08 : 1)
         .animation(.snappy(duration: 0.15), value: targeted.wrappedValue)
-        .onDrop(of: onDropItem == nil ? [] : [.clipStackItem], isTargeted: targeted.projectedValue) { providers in
-            guard let onDropItem else { return false }
-            return CardDrag.loadURI(from: providers) { _ = onDropItem($0) }
+        // Accept any type: whether it's one of our cards is decided in onDrop.
+        .onDrop(of: onDrop == nil ? [] : [.item], isTargeted: targeted.projectedValue) { providers in
+            onDrop?(providers) ?? false
         }
     }
 }
@@ -435,8 +522,8 @@ private struct ShelfCards: View {
         }
         let query = search.trimmingCharacters(in: .whitespaces)
         if !query.isEmpty {
-            predicates.append(NSPredicate(format: "text CONTAINS[cd] %@ OR urlString CONTAINS[cd] %@ OR filePathsRaw CONTAINS[cd] %@",
-                                          query, query, query))
+            predicates.append(NSPredicate(format: "title CONTAINS[cd] %@ OR text CONTAINS[cd] %@ OR urlString CONTAINS[cd] %@ OR filePathsRaw CONTAINS[cd] %@",
+                                          query, query, query, query))
         }
         let request = ClipItem.fetchRequest()
         request.predicate = NSCompoundPredicate(andPredicateWithSubpredicates: predicates)
@@ -483,14 +570,18 @@ private struct ShelfCards: View {
         return ClipCardView(item: item,
                             selected: model.selectedIndex == index,
                             justCopied: model.copiedID == item.objectID,
-                            onShowQR: payload.map { _ in { model.qrItem = item } })
-            .onDrag { CardDrag.provider(for: item) }
+                            onShowQR: payload.map { _ in { model.qrItem = item } },
+                            renameText: model.renaming == item ? $model.renameText : nil,
+                            onRenameCommit: { model.commitRename() })
+            .onDrag { model.dragStarted(item) }
             .onTapGesture {
+                guard model.renaming != item else { return } // clicking into the name field
                 model.selectedIndex = index
                 model.copy(item)
             }
             .contextMenu {
                 Button("Copy") { model.copy(item) }
+                Button("Rename…") { model.startRename(item) }
                 if payload != nil {
                     Button("Show QR Code") { model.qrItem = item }
                 }

@@ -20,6 +20,8 @@ final class ClipItem: NSManagedObject, Identifiable {
     @NSManaged var createdAt: Date
     @NSManaged var isPinned: Bool
     @NSManaged var categories: NSSet?
+    /// A name the user gave the card; nil shows the type ("Image", "Link", ...).
+    @NSManaged var title: String?
 
     var categoryList: [ClipCategory] {
         (categories?.allObjects as? [ClipCategory] ?? []).sorted { $0.createdAt < $1.createdAt }
@@ -57,11 +59,13 @@ final class ClipItem: NSManagedObject, Identifiable {
 
 enum ClipModel {
     /// The current model. Built in code since swiftc can't compile .xcdatamodeld bundles.
-    static let shared = make(withCategories: true)
-    /// The 0.1.0 model, kept so existing stores can be migrated (see `migrateIfNeeded`).
-    static let v1 = make(withCategories: false)
+    static let shared = make(version: 3)
+    /// Earlier models, newest first, kept so existing stores can be migrated (see
+    /// `migrateIfNeeded`): 2 added categories (0.2.0), 1 is 0.1.0.
+    static let previous = [make(version: 2), make(version: 1)]
 
-    private static func make(withCategories: Bool) -> NSManagedObjectModel {
+    private static func make(version: Int) -> NSManagedObjectModel {
+        let withCategories = version >= 2
         let entity = NSEntityDescription()
         entity.name = "ClipItem"
         entity.managedObjectClassName = "ClipItem"
@@ -92,6 +96,9 @@ enum ClipModel {
             attribute("createdAt", .dateAttributeType, optional: false, default: Date.distantPast),
             attribute("isPinned", .booleanAttributeType, optional: false, default: false),
         ]
+        if version >= 3 {
+            entity.properties.append(attribute("title", .stringAttributeType))
+        }
         entity.indexes = [
             NSFetchIndexDescription(name: "byHash", elements: [NSFetchIndexElementDescription(property: hash, collationType: .binary)]),
         ]
@@ -137,21 +144,21 @@ enum ClipModel {
         return model
     }
 
-    /// Lightweight migration can't find a code-built source model on its own, so a
-    /// 0.1.0 store is migrated here with an inferred mapping before it's opened.
+    /// Lightweight migration can't find a code-built source model on its own, so an
+    /// older store is migrated here with an inferred mapping before it's opened.
     static func migrateIfNeeded(storeURL: URL) {
         let options: [AnyHashable: Any] = [NSPersistentHistoryTrackingKey: true]
         guard FileManager.default.fileExists(atPath: storeURL.path),
               let metadata = try? NSPersistentStoreCoordinator.metadataForPersistentStore(
                   ofType: NSSQLiteStoreType, at: storeURL, options: options),
               !shared.isConfiguration(withName: nil, compatibleWithStoreMetadata: metadata),
-              v1.isConfiguration(withName: nil, compatibleWithStoreMetadata: metadata)
+              let source = previous.first(where: { $0.isConfiguration(withName: nil, compatibleWithStoreMetadata: metadata) })
         else { return }
 
         let temp = storeURL.deletingLastPathComponent().appendingPathComponent("ClipStack-migrating.sqlite")
         do {
-            let mapping = try NSMappingModel.inferredMappingModel(forSourceModel: v1, destinationModel: shared)
-            let manager = NSMigrationManager(sourceModel: v1, destinationModel: shared)
+            let mapping = try NSMappingModel.inferredMappingModel(forSourceModel: source, destinationModel: shared)
+            let manager = NSMigrationManager(sourceModel: source, destinationModel: shared)
             try manager.migrateStore(from: storeURL, sourceType: NSSQLiteStoreType, options: options,
                                      with: mapping, toDestinationURL: temp,
                                      destinationType: NSSQLiteStoreType, destinationOptions: options)
