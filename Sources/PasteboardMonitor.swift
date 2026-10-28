@@ -128,6 +128,9 @@ final class ClipStore: @unchecked Sendable {
             ? NSPersistentCloudKitContainerOptions(containerIdentifier: cloudKitContainerID!)
             : nil
 
+        if let url = description.url, !inMemory {
+            ClipModel.migrateIfNeeded(storeURL: url)
+        }
         container.loadPersistentStores { _, error in
             if let error { fatalError("Failed to load store: \(error)") }
         }
@@ -173,8 +176,9 @@ final class ClipStore: @unchecked Sendable {
         var keepers: [String: ClipItem] = [:]
         for item in items {
             if let keeper = keepers[item.contentHash] {
-                // Keep the newest copy; pinned anywhere means pinned.
+                // Keep the newest copy; pinned or categorized anywhere carries over.
                 keeper.isPinned = keeper.isPinned || item.isPinned
+                keeper.mutableSetValue(forKey: "categories").union(item.categories as? Set<AnyHashable> ?? [])
                 context.delete(item)
             } else {
                 keepers[item.contentHash] = item
@@ -243,12 +247,13 @@ final class ClipStore: @unchecked Sendable {
         let days = UserDefaults.standard.integer(forKey: Prefs.expiryDays)
         if days > 0 {
             let expired = ClipItem.fetchRequest()
-            expired.predicate = NSPredicate(format: "isPinned == NO AND createdAt < %@",
+            expired.predicate = NSPredicate(format: "isPinned == NO AND categories.@count == 0 AND createdAt < %@",
                                             Date(timeIntervalSinceNow: -Double(days) * 86_400) as NSDate)
             for item in (try? context.fetch(expired)) ?? [] { context.delete(item) }
         }
         let request = ClipItem.fetchRequest()
-        request.predicate = NSPredicate(format: "isPinned == NO")
+        // Pinned and categorized items are kept and don't count toward the limit.
+        request.predicate = NSPredicate(format: "isPinned == NO AND categories.@count == 0")
         request.sortDescriptors = [NSSortDescriptor(key: "createdAt", ascending: false)]
         request.fetchOffset = limit
         for item in (try? context.fetch(request)) ?? [] {

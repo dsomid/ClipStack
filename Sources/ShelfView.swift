@@ -1,0 +1,386 @@
+import SwiftUI
+import CoreData
+
+enum ShelfTab: Hashable {
+    case all, pinned
+    case kind(ClipKind)
+    case category(NSManagedObjectID)
+}
+
+/// Shelf state shared by the views and the panel's keyboard handling.
+/// (An ObservableObject because @State is a macro and CLT lacks its plugin.)
+@MainActor
+final class ShelfModel: ObservableObject {
+    @Published var search = ""
+    @Published var tab = ShelfTab.all { didSet { selectedIndex = 0 } }
+    @Published var selectedIndex = 0
+    @Published var copiedID: NSManagedObjectID?
+    @Published var qrItem: ClipItem?
+    /// Non-nil while the inline category name field is showing.
+    @Published var categoryDraft: CategoryDraft?
+    @Published var focusSearch = 0
+
+    /// Items currently on screen, in order, for arrow-key navigation.
+    var visibleItems: [ClipItem] = []
+    var onCopy: () -> Void = {}
+
+    struct CategoryDraft: Equatable {
+        var name = ""
+        /// Category being renamed, or nil when creating one.
+        var editing: ClipCategory?
+        /// Item to add to the new category once it's created.
+        var pendingItem: ClipItem?
+    }
+
+    var selectedItem: ClipItem? {
+        visibleItems.indices.contains(selectedIndex) ? visibleItems[selectedIndex] : nil
+    }
+
+    func moveSelection(by delta: Int) {
+        guard !visibleItems.isEmpty else { return }
+        selectedIndex = min(max(selectedIndex + delta, 0), visibleItems.count - 1)
+    }
+
+    func reset() {
+        search = ""
+        selectedIndex = 0
+        qrItem = nil
+        categoryDraft = nil
+        focusSearch += 1
+    }
+
+    func copy(_ item: ClipItem) {
+        guard let context = item.managedObjectContext else { return }
+        Paster.write(item)
+        item.createdAt = Date()
+        try? context.save()
+        copiedID = item.objectID
+        Task {
+            try? await Task.sleep(for: .seconds(0.3))
+            onCopy()
+            try? await Task.sleep(for: .seconds(0.5))
+            if copiedID == item.objectID { copiedID = nil }
+        }
+    }
+
+    func commitCategoryDraft(in context: NSManagedObjectContext) {
+        guard let draft = categoryDraft else { return }
+        categoryDraft = nil
+        let name = draft.name.trimmingCharacters(in: .whitespaces)
+        guard !name.isEmpty else { return }
+        if let category = draft.editing {
+            category.name = name
+        } else {
+            let count = (try? context.count(for: ClipCategory.fetchRequest())) ?? 0
+            let category = ClipCategory(context: context)
+            category.name = name
+            category.colorIndex = Int16(count % ClipCategory.palette.count)
+            draft.pendingItem?.toggle(category)
+            tab = .category(category.objectID)
+        }
+        try? context.save()
+    }
+}
+
+struct ShelfView: View {
+    @ObservedObject var model: ShelfModel
+
+    var body: some View {
+        VStack(spacing: 0) {
+            ShelfBar(model: model)
+            ShelfCards(model: model, search: model.search, tab: model.tab)
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .overlay {
+            if let item = model.qrItem, let payload = QRCode.payload(for: item) {
+                ZStack {
+                    Color.black.opacity(0.35)
+                        .onTapGesture { model.qrItem = nil }
+                    QRShareView(payload: payload, isURL: item.kind == .url) { model.qrItem = nil }
+                        .scaleEffect(0.85)
+                }
+                .transition(.opacity)
+            }
+        }
+        .animation(.easeOut(duration: 0.15), value: model.qrItem)
+    }
+}
+
+// MARK: - Top bar
+
+private struct ShelfBar: View {
+    @ObservedObject var model: ShelfModel
+    @Environment(\.managedObjectContext) private var context
+    @FetchRequest(sortDescriptors: [SortDescriptor(\ClipCategory.createdAt)])
+    private var categories: FetchedResults<ClipCategory>
+    @AppStorage(Prefs.capturePaused) private var paused = false
+    @FocusState private var searchFocused: Bool
+    @FocusState private var draftFocused: Bool
+
+    var body: some View {
+        HStack(spacing: 10) {
+            HStack(spacing: 6) {
+                Image(systemName: "magnifyingglass").foregroundStyle(.secondary)
+                TextField("Search", text: $model.search)
+                    .textFieldStyle(.plain)
+                    .focused($searchFocused)
+                    .frame(width: 160)
+                if !model.search.isEmpty {
+                    Button { model.search = "" } label: { Image(systemName: "xmark.circle.fill") }
+                        .buttonStyle(.plain)
+                        .foregroundStyle(.secondary)
+                }
+            }
+            .padding(.horizontal, 10).padding(.vertical, 6)
+            .background(.quaternary.opacity(0.7), in: Capsule())
+
+            ScrollView(.horizontal, showsIndicators: false) {
+                HStack(spacing: 6) {
+                    Chip(title: "Clipboard", systemImage: "clock", selected: model.tab == .all) { model.tab = .all }
+                    Chip(title: "Pinned", systemImage: "pin", selected: model.tab == .pinned) { model.tab = .pinned }
+                    kindMenu
+                    Divider().frame(height: 18).padding(.horizontal, 4)
+                    ForEach(categories) { category in
+                        if model.categoryDraft?.editing == category {
+                            draftField
+                        } else {
+                            Chip(title: category.name, color: category.color,
+                                 selected: model.tab == .category(category.objectID)) {
+                                model.tab = .category(category.objectID)
+                            }
+                            .contextMenu { categoryMenu(category) }
+                        }
+                    }
+                    if let draft = model.categoryDraft, draft.editing == nil {
+                        draftField
+                    } else {
+                        Button {
+                            model.categoryDraft = .init()
+                        } label: {
+                            Image(systemName: "plus")
+                                .frame(width: 26, height: 26)
+                                .background(.quaternary.opacity(0.7), in: Circle())
+                        }
+                        .buttonStyle(.plain)
+                        .help("New category")
+                    }
+                }
+                .padding(.vertical, 2)
+            }
+
+            Toggle(isOn: $paused) { Image(systemName: paused ? "pause.circle.fill" : "pause.circle") }
+                .toggleStyle(.button)
+                .buttonStyle(.plain)
+                .foregroundStyle(paused ? .orange : .secondary)
+                .font(.title3)
+                .help(paused ? "Capture is paused" : "Pause capture")
+            SettingsLink { Image(systemName: "gearshape").font(.title3) }
+                .buttonStyle(.plain)
+                .foregroundStyle(.secondary)
+                .simultaneousGesture(TapGesture().onEnded { NSApp.activate() })
+                .help("Settings")
+        }
+        .padding(.horizontal, 16)
+        .padding(.top, 12)
+        .padding(.bottom, 8)
+        .onChange(of: model.focusSearch) { searchFocused = true }
+        .onAppear { searchFocused = true }
+    }
+
+    private var kindMenu: some View {
+        let kinds: [(ClipKind, String, String)] = [(.text, "Text", "text.alignleft"), (.url, "Links", "link"),
+                                                    (.image, "Images", "photo"), (.file, "Files", "doc")]
+        let current = kinds.first { model.tab == .kind($0.0) }
+        return Menu {
+            ForEach(kinds, id: \.0) { kind, title, icon in
+                Button { model.tab = .kind(kind) } label: { Label(title, systemImage: icon) }
+            }
+        } label: {
+            Label(current?.1 ?? "Type", systemImage: current?.2 ?? "line.3.horizontal.decrease")
+        }
+        .menuStyle(.borderlessButton)
+        .fixedSize()
+        .padding(.horizontal, 10).padding(.vertical, 5)
+        .background(current != nil ? Color.accentColor.opacity(0.25) : Color.primary.opacity(0.06), in: Capsule())
+    }
+
+    private var draftField: some View {
+        TextField("Category name", text: Binding(
+            get: { model.categoryDraft?.name ?? "" },
+            set: { model.categoryDraft?.name = $0 }))
+            .textFieldStyle(.plain)
+            .focused($draftFocused)
+            .frame(width: 130)
+            .padding(.horizontal, 10).padding(.vertical, 5)
+            .background(Capsule().strokeBorder(Color.accentColor, lineWidth: 1.5))
+            .onSubmit { model.commitCategoryDraft(in: context) }
+            .onAppear { draftFocused = true }
+    }
+
+    @ViewBuilder
+    private func categoryMenu(_ category: ClipCategory) -> some View {
+        Button("Rename…") { model.categoryDraft = .init(name: category.name, editing: category) }
+        Menu("Color") {
+            ForEach(ClipCategory.palette.indices, id: \.self) { index in
+                Button { category.colorIndex = Int16(index); try? context.save() } label: {
+                    Label(Self.colorNames[index], systemImage: category.colorIndex == index ? "checkmark.circle.fill" : "circle.fill")
+                }
+            }
+        }
+        Divider()
+        Button("Delete Category", role: .destructive) {
+            if model.tab == .category(category.objectID) { model.tab = .all }
+            context.delete(category)
+            try? context.save()
+        }
+    }
+
+    private static let colorNames = ["Red", "Orange", "Yellow", "Green", "Teal", "Blue", "Purple", "Pink"]
+}
+
+private struct Chip: View {
+    let title: String
+    var systemImage: String?
+    var color: Color?
+    let selected: Bool
+    let action: () -> Void
+
+    var body: some View {
+        Button(action: action) {
+            HStack(spacing: 5) {
+                if let color {
+                    Circle().fill(color).frame(width: 8, height: 8)
+                } else if let systemImage {
+                    Image(systemName: systemImage).font(.system(size: 11, weight: .semibold))
+                }
+                Text(title).lineLimit(1)
+            }
+            .font(.system(size: 12, weight: .medium))
+            .padding(.horizontal, 10).padding(.vertical, 5)
+            .background(selected ? (color ?? .accentColor).opacity(0.3) : Color.primary.opacity(0.06), in: Capsule())
+            .contentShape(Capsule())
+        }
+        .buttonStyle(.plain)
+    }
+}
+
+// MARK: - Cards
+
+/// Separate view so the fetch request is rebuilt when search or tab change.
+private struct ShelfCards: View {
+    @ObservedObject var model: ShelfModel
+    @Environment(\.managedObjectContext) private var context
+    @FetchRequest private var items: FetchedResults<ClipItem>
+    @FetchRequest(sortDescriptors: [SortDescriptor(\ClipCategory.createdAt)])
+    private var categories: FetchedResults<ClipCategory>
+
+    init(model: ShelfModel, search: String, tab: ShelfTab) {
+        self.model = model
+        var predicates: [NSPredicate] = []
+        switch tab {
+        case .all: break
+        case .pinned: predicates.append(NSPredicate(format: "isPinned == YES"))
+        case .kind(let kind): predicates.append(NSPredicate(format: "kindRaw == %@", kind.rawValue))
+        case .category(let id): predicates.append(NSPredicate(format: "ANY categories == %@", id))
+        }
+        let query = search.trimmingCharacters(in: .whitespaces)
+        if !query.isEmpty {
+            predicates.append(NSPredicate(format: "text CONTAINS[cd] %@ OR urlString CONTAINS[cd] %@ OR filePathsRaw CONTAINS[cd] %@",
+                                          query, query, query))
+        }
+        let request = ClipItem.fetchRequest()
+        request.predicate = NSCompoundPredicate(andPredicateWithSubpredicates: predicates)
+        // The main history is newest first, like a timeline; pins live in their own tab.
+        request.sortDescriptors = [NSSortDescriptor(key: "createdAt", ascending: false)]
+        request.fetchBatchSize = 30
+        _items = FetchRequest(fetchRequest: request, animation: .snappy)
+    }
+
+    var body: some View {
+        Group {
+            if items.isEmpty {
+                ContentUnavailableView(emptyTitle, systemImage: "rectangle.stack",
+                                       description: Text(emptyMessage))
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+            } else {
+                ScrollViewReader { proxy in
+                    ScrollView(.horizontal, showsIndicators: false) {
+                        LazyHStack(spacing: 14) {
+                            ForEach(Array(items.enumerated()), id: \.element.objectID) { index, item in
+                                card(item, index: index)
+                                    .id(item.objectID)
+                            }
+                        }
+                        .padding(.horizontal, 16)
+                        .padding(.vertical, 10)
+                    }
+                    .onChange(of: model.selectedIndex) {
+                        guard let item = model.selectedItem else { return }
+                        withAnimation(.snappy) { proxy.scrollTo(item.objectID, anchor: .center) }
+                    }
+                }
+            }
+        }
+        .onAppear { model.visibleItems = Array(items) }
+        .onChange(of: items.map(\.objectID)) {
+            model.visibleItems = Array(items)
+            model.selectedIndex = min(model.selectedIndex, max(items.count - 1, 0))
+        }
+    }
+
+    private func card(_ item: ClipItem, index: Int) -> some View {
+        let payload = QRCode.payload(for: item)
+        return ClipCardView(item: item,
+                            selected: model.selectedIndex == index,
+                            justCopied: model.copiedID == item.objectID,
+                            onShowQR: payload.map { _ in { model.qrItem = item } })
+            .onTapGesture {
+                model.selectedIndex = index
+                model.copy(item)
+            }
+            .contextMenu {
+                Button("Copy") { model.copy(item) }
+                if payload != nil {
+                    Button("Show QR Code") { model.qrItem = item }
+                }
+                Button(item.isPinned ? "Unpin" : "Pin") {
+                    item.isPinned.toggle()
+                    try? context.save()
+                }
+                Menu("Category") {
+                    ForEach(categories) { category in
+                        Button {
+                            item.toggle(category)
+                            try? context.save()
+                        } label: {
+                            Label(category.name, systemImage: item.isIn(category) ? "checkmark.circle.fill" : "circle")
+                        }
+                    }
+                    if !categories.isEmpty { Divider() }
+                    Button("New Category…") { model.categoryDraft = .init(pendingItem: item) }
+                }
+                Divider()
+                Button("Delete", role: .destructive) {
+                    context.delete(item)
+                    try? context.save()
+                }
+            }
+    }
+
+    private var emptyTitle: String {
+        switch model.tab {
+        case .all: model.search.isEmpty ? "Nothing copied yet" : "No matches"
+        case .pinned: "No pinned items"
+        case .kind: "Nothing of this type"
+        case .category: "This category is empty"
+        }
+    }
+
+    private var emptyMessage: String {
+        switch model.tab {
+        case .category: "Right-click any card and choose Category to add it here."
+        case .pinned: "Right-click a card and choose Pin."
+        default: "Copy something and it will show up here."
+        }
+    }
+}

@@ -1,5 +1,16 @@
 # Changelog
 
+## 0.2.0
+
+- New shelf interface: history slides up from the bottom of the screen as a horizontal row of large cards
+- Categories: create color-coded categories, add cards to them, rename, recolor or delete them
+- Pinned items and each type (Text, Links, Images, Files) have their own tabs
+- Keyboard navigation: ← → between cards, Return to paste, Esc to back out
+- Cards show a colored header, source app, and details like character count, link host or image size
+- The menu bar icon opens a menu (Open, Pause Capture, Settings, Quit)
+- Items in a category are kept like pinned items
+- Existing 0.1.0 history is migrated automatically
+
 ## 0.1.0
 
 First release.

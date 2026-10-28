@@ -6,7 +6,7 @@
 
 <p align="center">
   A visual clipboard history for macOS that lives in your menu bar.<br>
-  Everything you copy, as cards you can search, pin, paste back, or beam to your phone as a QR code.
+  Press ⇧⌘V and everything you copy slides up from the bottom of the screen as cards you can search, sort into categories, paste back, or beam to your phone as a QR code.
 </p>
 
 <p align="center">
@@ -15,16 +15,22 @@
   <a href="CHANGELOG.md"><img src="https://img.shields.io/badge/changelog-read-green" alt="Changelog"></a>
 </p>
 
+<p align="center">
+  <img src="docs/shelf.png" alt="The ClipStack shelf with cards and categories">
+</p>
+
 ## Features
 
 | | |
 | --- | --- |
 | **Captures everything** | Text, links, images and files, as you copy them |
-| **Card grid** | Rich previews: text snippets, link hosts, image thumbnails, file icons, source app |
-| **Global hotkey** | ⇧⌘V opens a floating panel over any app; Esc or click outside to close |
+| **Shelf of cards** | Slides up from the bottom of the screen with a horizontal row of cards: colored headers, source app icon, rich previews of text, links, images and files |
+| **Global hotkey** | ⇧⌘V opens the shelf over any app, on the screen your mouse is on |
+| **Categories** | Make your own color-coded categories and add any card to one or more of them |
 | **Search and filter** | Search all text, links and file names; filter by Text, Links, Images, Files |
+| **Keyboard first** | ← → to move between cards, Return to paste, type to search, Esc to close |
 | **Click to copy** | Click a card to put it back on the clipboard, or turn on **auto-paste** |
-| **Pin** | Pinned items stay at the top and are never cleaned up |
+| **Pin** | Pinned items get their own tab; pinned and categorized items are never cleaned up |
 | **Instant QR Share** | Hover a link or short text and click the QR button to scan it with your phone |
 | **Privacy** | Ignores password managers, plus any apps you add; **Pause** capture; auto-delete after a day, week or month |
 | **Settings** | Custom shortcut, history size (100 to 2,500), launch at login |
@@ -67,13 +73,17 @@ defaults delete com.omid.clipstack
 
 | Action | How |
 | --- | --- |
-| Open history | Click the menu bar icon, or press **⇧⌘V** anywhere |
-| Copy an item | Click its card |
+| Open the shelf | Press **⇧⌘V** anywhere, or choose **Open ClipStack** from the menu bar icon |
+| Move between cards | **←** **→** |
+| Copy an item | Click its card, or select it and press **Return** |
 | Pin, delete, show QR | Right-click a card |
+| Make a category | Click **+** in the top bar and type a name |
+| Add to a category | Right-click a card → **Category** |
+| Rename, recolor or delete a category | Right-click its tab |
 | QR code | Hover a link or short-text card and click the QR button in its corner |
-| Close the panel | **Esc**, or click outside it |
+| Close the shelf | **Esc**, or click outside it |
 | Change the shortcut | **Settings… → Show history**, click the shortcut and press new keys |
-| Stop capturing for a while | Tick **Pause** at the bottom of the history |
+| Stop capturing for a while | Click **⏸** in the shelf, or **Pause Capture** in the menu |
 
 ## Build from source
 

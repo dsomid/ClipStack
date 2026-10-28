@@ -1,15 +1,16 @@
 import AppKit
 import SwiftUI
 
-/// A Spotlight-style panel: takes keyboard focus without activating the app,
-/// so the frontmost app stays frontmost and can receive the paste.
+/// A full-width shelf along the bottom of the screen. It takes keyboard focus
+/// without activating the app, so the frontmost app stays frontmost for the paste.
 final class FloatingPanel: NSPanel {
+    /// Called when the panel should go away (Esc, clicking elsewhere).
+    var onDismiss: () -> Void = {}
+
     init<Content: View>(rootView: Content) {
-        // Borderless rather than titled: a hidden title bar still adds height above the grid.
-        super.init(contentRect: NSRect(x: 0, y: 0, width: 520, height: 560),
+        super.init(contentRect: NSRect(x: 0, y: 0, width: 1200, height: ShelfLayout.height),
                    styleMask: [.nonactivatingPanel, .borderless],
                    backing: .buffered, defer: true)
-        isMovableByWindowBackground = true
         level = .floating
         collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary, .transient]
         hidesOnDeactivate = false
@@ -19,10 +20,12 @@ final class FloatingPanel: NSPanel {
         hasShadow = true
 
         let effect = NSVisualEffectView()
-        effect.material = .popover
+        effect.material = .hudWindow
+        effect.blendingMode = .behindWindow
         effect.state = .active
         effect.wantsLayer = true
-        effect.layer?.cornerRadius = 12
+        effect.layer?.cornerRadius = 18
+        effect.layer?.maskedCorners = [.layerMinXMaxYCorner, .layerMaxXMaxYCorner]
         effect.layer?.masksToBounds = true
         let host = NSHostingView(rootView: rootView)
         host.translatesAutoresizingMaskIntoConstraints = false
@@ -38,27 +41,38 @@ final class FloatingPanel: NSPanel {
 
     override var canBecomeKey: Bool { true }
 
-    // Escape closes, as does clicking anywhere outside the panel.
-    override func cancelOperation(_ sender: Any?) { close() }
+    override func cancelOperation(_ sender: Any?) { onDismiss() }
     override func resignKey() {
         super.resignKey()
-        close()
+        onDismiss()
     }
+}
+
+enum ShelfLayout {
+    static let height: CGFloat = 340
 }
 
 @MainActor
 final class PanelController {
     private let store: ClipStore
-    private lazy var panel = FloatingPanel(rootView:
-        HistoryGridView(onCopy: { [weak self] in self?.didCopy() })
-            .environment(\.managedObjectContext, store.container.viewContext))
+    let model = ShelfModel()
+    private lazy var panel: FloatingPanel = {
+        let panel = FloatingPanel(rootView:
+            ShelfView(model: model)
+                .environment(\.managedObjectContext, store.container.viewContext))
+        panel.onDismiss = { [weak self] in self?.hide() }
+        return panel
+    }()
 
     private var hotKey: GlobalHotKey?
+    private var keyMonitor: Any?
+    private var isShown = false
     /// The app that was frontmost when the panel opened, so focus and the paste go back to it.
     private var previousApp: NSRunningApplication?
 
     init(store: ClipStore) {
         self.store = store
+        model.onCopy = { [weak self] in self?.didCopy() }
     }
 
     /// Returns false if the shortcut is taken by another app.
@@ -75,25 +89,48 @@ final class PanelController {
     }
 
     func toggle() {
-        panel.isVisible ? hide() : show()
+        isShown ? hide() : show()
     }
 
     func show() {
+        guard !isShown else { return }
+        isShown = true
         let front = NSWorkspace.shared.frontmostApplication
         previousApp = front?.processIdentifier == ProcessInfo.processInfo.processIdentifier ? nil : front
-        // Open on the screen the mouse is on, slightly above center like Spotlight.
+        model.reset()
+
+        // Open on the screen the mouse is on, sliding up from its bottom edge (above the Dock).
         let mouse = NSEvent.mouseLocation
         let screen = NSScreen.screens.first { $0.frame.contains(mouse) } ?? NSScreen.main
-        if let visible = screen?.visibleFrame {
-            let size = panel.frame.size
-            panel.setFrameOrigin(NSPoint(x: visible.midX - size.width / 2,
-                                         y: visible.midY - size.height / 2 + visible.height * 0.1))
-        }
+        guard let visible = screen?.visibleFrame else { return }
+        let target = NSRect(x: visible.minX, y: visible.minY, width: visible.width, height: ShelfLayout.height)
+        panel.setFrame(target.offsetBy(dx: 0, dy: -ShelfLayout.height), display: false)
+        panel.alphaValue = 1
         panel.makeKeyAndOrderFront(nil)
+        NSAnimationContext.runAnimationGroup { context in
+            context.duration = 0.22
+            context.timingFunction = CAMediaTimingFunction(controlPoints: 0.2, 0.9, 0.3, 1)
+            panel.animator().setFrame(target, display: true)
+        }
+        installKeyMonitor()
     }
 
     func hide() {
-        panel.close()
+        guard isShown else { return }
+        isShown = false
+        removeKeyMonitor()
+        let frame = panel.frame
+        NSAnimationContext.runAnimationGroup({ context in
+            context.duration = 0.16
+            context.timingFunction = CAMediaTimingFunction(name: .easeIn)
+            panel.animator().setFrame(frame.offsetBy(dx: 0, dy: -frame.height), display: true)
+            panel.animator().alphaValue = 0
+        }, completionHandler: { [weak self] in
+            MainActor.assumeIsolated {
+                guard let self, !self.isShown else { return }
+                self.panel.orderOut(nil)
+            }
+        })
     }
 
     private func didCopy() {
@@ -101,5 +138,44 @@ final class PanelController {
         // The panel normally never activates us, but if it did, hand focus back first.
         if NSApp.isActive { previousApp?.activate() }
         AutoPaster.pasteIfEnabled()
+    }
+
+    /// Arrow keys move between cards, Return copies, Esc backs out one level.
+    private func installKeyMonitor() {
+        removeKeyMonitor()
+        keyMonitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { [weak self] event in
+            guard let self, event.window === self.panel else { return event }
+            return self.handle(event) ? nil : event
+        }
+    }
+
+    private func removeKeyMonitor() {
+        if let keyMonitor { NSEvent.removeMonitor(keyMonitor) }
+        keyMonitor = nil
+    }
+
+    private func handle(_ event: NSEvent) -> Bool {
+        let model = self.model
+        switch event.keyCode {
+        case 53: // Esc
+            if model.qrItem != nil { model.qrItem = nil }
+            else if model.categoryDraft != nil { model.categoryDraft = nil }
+            else if !model.search.isEmpty { model.search = "" }
+            else { hide() }
+            return true
+        case _ where model.categoryDraft != nil:
+            return false // typing a category name
+        case 123: // ←
+            model.moveSelection(by: -1)
+            return true
+        case 124: // →
+            model.moveSelection(by: 1)
+            return true
+        case 36, 76: // Return, Enter
+            if let item = model.selectedItem { model.copy(item) }
+            return true
+        default:
+            return false
+        }
     }
 }
