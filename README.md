@@ -26,7 +26,8 @@
 | **Captures everything** | Text, links, images and files, as you copy them |
 | **Shelf of cards** | Slides up from the bottom of the screen with a horizontal row of cards: colored headers, source app icon, rich previews of text, links, images and files |
 | **Global hotkey** | ⇧⌘V opens the shelf over any app, on the screen your mouse is on |
-| **Categories** | Make your own color-coded categories and add any card to one or more of them |
+| **Categories** | Make your own color-coded categories; drag a card onto a category to add it |
+| **Drag anywhere** | Drag a card into Mail, Messages, Finder or any text field to drop its image, text, link or file |
 | **Search and filter** | Search all text, links and file names; filter by Text, Links, Images, Files |
 | **Keyboard first** | ← → to move between cards, Return to paste, start typing to search, Esc to close |
 | **Click to copy** | Click a card to put it back on the clipboard, or turn on **auto-paste** |
@@ -77,8 +78,9 @@ defaults delete com.omid.clipstack
 | Move between cards | **←** **→** |
 | Copy an item | Click its card, or select it and press **Return** |
 | Pin, delete, show QR | Right-click a card |
-| Make a category | Click **+** in the top bar and type a name |
-| Add to a category | Right-click a card → **Category** |
+| Make a category | Click **+** in the top bar, type a name and pick a color |
+| Add to a category | Drag the card onto the category, or right-click it → **Category** |
+| Use a card in another app | Drag it out of the shelf |
 | Rename, recolor or delete a category | Right-click its tab |
 | QR code | Hover a link or short-text card and click the QR button in its corner |
 | Close the shelf | **Esc**, or click outside it |

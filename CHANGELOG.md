@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.2.2
+
+- Drag a card onto a category to add it
+- Drag a card into other apps to drop its image, text, link or file
+- Pick a category's color from swatches when creating or renaming it
+- Fixed: New Category… from a card's right-click menu did nothing
+- Fixed: the shelf closed when a context menu opened or a drag started
+
 ## 0.2.1
 
 - Cleaner top bar: one centered row with a search icon, Clipboard, your categories as colored dots, and +

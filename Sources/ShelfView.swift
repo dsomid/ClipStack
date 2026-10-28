@@ -1,5 +1,54 @@
 import SwiftUI
 import CoreData
+import UniformTypeIdentifiers
+
+extension UTType {
+    /// A card dragged within ClipStack (declared in Info.plist), carrying its object ID.
+    static let clipStackItem = UTType(exportedAs: "com.omid.clipstack.item")
+}
+
+enum CardDrag {
+    /// Our own type for dropping on a category tab, plus the real content so the
+    /// card can also be dropped into other apps.
+    static func provider(for item: ClipItem) -> NSItemProvider {
+        let provider = NSItemProvider()
+        let uri = item.objectID.uriRepresentation().absoluteString
+        provider.registerDataRepresentation(forTypeIdentifier: UTType.clipStackItem.identifier,
+                                            visibility: .ownProcess) { completion in
+            completion(Data(uri.utf8), nil)
+            return nil
+        }
+        switch item.kind {
+        case .text:
+            provider.registerObject((item.text ?? "") as NSString, visibility: .all)
+        case .url:
+            if let url = URL(string: item.urlString ?? "") { provider.registerObject(url as NSURL, visibility: .all) }
+        case .image:
+            if let data = item.imageData {
+                provider.registerDataRepresentation(forTypeIdentifier: UTType.png.identifier, visibility: .all) { completion in
+                    completion(data, nil)
+                    return nil
+                }
+            }
+        case .file:
+            if let path = item.filePaths.first {
+                provider.registerObject(URL(fileURLWithPath: path) as NSURL, visibility: .all)
+            }
+        }
+        return provider
+    }
+
+    /// Reads the object-ID URI back out of a dropped card.
+    static func loadURI(from providers: [NSItemProvider], completion: @escaping @MainActor (String) -> Void) -> Bool {
+        guard let provider = providers.first(where: { $0.hasItemConformingToTypeIdentifier(UTType.clipStackItem.identifier) })
+        else { return false }
+        _ = provider.loadDataRepresentation(forTypeIdentifier: UTType.clipStackItem.identifier) { data, _ in
+            guard let data, let uri = String(data: data, encoding: .utf8) else { return }
+            DispatchQueue.main.async { MainActor.assumeIsolated { completion(uri) } }
+        }
+        return true
+    }
+}
 
 enum ShelfTab: Hashable {
     case all, pinned
@@ -32,6 +81,8 @@ final class ShelfModel: ObservableObject {
         var editing: ClipCategory?
         /// Item to add to the new category once it's created.
         var pendingItem: ClipItem?
+        /// Picked in the name field; nil means the category's current (or next) color.
+        var colorIndex: Int16?
     }
 
     var selectedItem: ClipItem? {
@@ -86,15 +137,34 @@ final class ShelfModel: ObservableObject {
         guard !name.isEmpty else { return }
         if let category = draft.editing {
             category.name = name
+            if let color = draft.colorIndex { category.colorIndex = color }
         } else {
-            let count = (try? context.count(for: ClipCategory.fetchRequest())) ?? 0
             let category = ClipCategory(context: context)
             category.name = name
-            category.colorIndex = Int16(count % ClipCategory.palette.count)
+            category.colorIndex = draft.colorIndex ?? Self.nextColor(in: context)
             draft.pendingItem?.toggle(category)
             tab = .category(category.objectID)
         }
         try? context.save()
+    }
+
+    /// New categories cycle through the palette.
+    static func nextColor(in context: NSManagedObjectContext) -> Int16 {
+        let count = (try? context.count(for: ClipCategory.fetchRequest())) ?? 0
+        return Int16(count % ClipCategory.palette.count)
+    }
+
+    /// Adds a card dropped on a category tab. Returns false if the drop wasn't one of our cards.
+    @discardableResult
+    func addDroppedItem(_ uri: String, to category: ClipCategory) -> Bool {
+        guard let context = category.managedObjectContext,
+              let url = URL(string: uri),
+              let id = context.persistentStoreCoordinator?.managedObjectID(forURIRepresentation: url),
+              let item = try? context.existingObject(with: id) as? ClipItem
+        else { return false }
+        if !item.isIn(category) { item.toggle(category) }
+        try? context.save()
+        return true
     }
 }
 
@@ -151,7 +221,8 @@ private struct ShelfBar: View {
                             draftField
                         } else {
                             Tab(title: category.name, color: category.color,
-                                selected: model.tab == .category(category.objectID)) {
+                                selected: model.tab == .category(category.objectID),
+                                onDropItem: { model.addDroppedItem($0, to: category) }) {
                                 model.tab = .category(category.objectID)
                             }
                             .contextMenu { categoryMenu(category) }
@@ -236,7 +307,7 @@ private struct ShelfBar: View {
 
     private var draftField: some View {
         HStack(spacing: 8) {
-            Circle().fill(Color.secondary).frame(width: 14, height: 14)
+            Circle().fill(ClipCategory.palette[draftColorIndex]).frame(width: 14, height: 14)
             TextField("Category name", text: Binding(
                 get: { model.categoryDraft?.name ?? "" },
                 set: { model.categoryDraft?.name = $0 }))
@@ -245,11 +316,41 @@ private struct ShelfBar: View {
                 .frame(width: 140)
                 .onSubmit { model.commitCategoryDraft(in: context) }
                 .onAppear { draftFocused = true }
+            draftColorSwatches
         }
         .font(.system(size: 15))
         .padding(.horizontal, 12)
         .frame(height: 34)
         .background(RoundedRectangle(cornerRadius: 8).strokeBorder(Color.accentColor, lineWidth: 1.5))
+    }
+
+    private var draftColorIndex: Int {
+        Int(model.categoryDraft?.colorIndex
+            ?? model.categoryDraft?.editing?.colorIndex
+            ?? ShelfModel.nextColor(in: context)) % ClipCategory.palette.count
+    }
+
+    /// Swatches shown beside the name field. Plain SwiftUI buttons, since a menu or
+    /// popover would take key status from the shelf and close it.
+    private var draftColorSwatches: some View {
+        HStack(spacing: 5) {
+            ForEach(ClipCategory.palette.indices, id: \.self) { option in
+                Button {
+                    model.categoryDraft?.colorIndex = Int16(option)
+                    draftFocused = true
+                } label: {
+                    Circle()
+                        .fill(ClipCategory.palette[option])
+                        .frame(width: 14, height: 14)
+                        .padding(2)
+                        .overlay(Circle().strokeBorder(Color.primary.opacity(option == draftColorIndex ? 0.9 : 0), lineWidth: 1.5))
+                        .contentShape(Circle())
+                }
+                .buttonStyle(.plain)
+                .help(Self.colorNames[option])
+            }
+        }
+        .padding(.leading, 2)
     }
 
     @ViewBuilder
@@ -279,9 +380,14 @@ private struct Tab: View {
     var systemImage: String?
     var color: Color?
     let selected: Bool
+    /// Set on category tabs so cards can be dropped onto them.
+    var onDropItem: ((String) -> Bool)?
     let action: () -> Void
+    private let targeted = State(initialValue: false) // @State is a macro; CLT lacks its plugin
 
     var body: some View {
+        let highlight = targeted.wrappedValue ? (color ?? .accentColor).opacity(0.35)
+            : selected ? Color.primary.opacity(0.14) : .clear
         Button(action: action) {
             HStack(spacing: 8) {
                 if let color {
@@ -295,10 +401,16 @@ private struct Tab: View {
             .foregroundStyle(Color.primary.opacity(selected ? 1 : 0.85))
             .padding(.horizontal, 12)
             .frame(height: 34)
-            .background(selected ? Color.primary.opacity(0.14) : .clear, in: RoundedRectangle(cornerRadius: 8))
+            .background(highlight, in: RoundedRectangle(cornerRadius: 8))
             .contentShape(RoundedRectangle(cornerRadius: 8))
         }
         .buttonStyle(.plain)
+        .scaleEffect(targeted.wrappedValue ? 1.08 : 1)
+        .animation(.snappy(duration: 0.15), value: targeted.wrappedValue)
+        .onDrop(of: onDropItem == nil ? [] : [.clipStackItem], isTargeted: targeted.projectedValue) { providers in
+            guard let onDropItem else { return false }
+            return CardDrag.loadURI(from: providers) { _ = onDropItem($0) }
+        }
     }
 }
 
@@ -372,6 +484,7 @@ private struct ShelfCards: View {
                             selected: model.selectedIndex == index,
                             justCopied: model.copiedID == item.objectID,
                             onShowQR: payload.map { _ in { model.qrItem = item } })
+            .onDrag { CardDrag.provider(for: item) }
             .onTapGesture {
                 model.selectedIndex = index
                 model.copy(item)

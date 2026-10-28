@@ -1,11 +1,14 @@
 import AppKit
+import Combine
 import SwiftUI
 
 /// A full-width shelf along the bottom of the screen. It takes keyboard focus
 /// without activating the app, so the frontmost app stays frontmost for the paste.
 final class FloatingPanel: NSPanel {
-    /// Called when the panel should go away (Esc, clicking elsewhere).
+    /// Called on Esc.
     var onDismiss: () -> Void = {}
+    /// Called when the panel loses key status; the controller decides whether that means dismiss.
+    var onResignKey: () -> Void = {}
 
     init<Content: View>(rootView: Content) {
         super.init(contentRect: NSRect(x: 0, y: 0, width: 1200, height: ShelfLayout.height),
@@ -44,7 +47,7 @@ final class FloatingPanel: NSPanel {
     override func cancelOperation(_ sender: Any?) { onDismiss() }
     override func resignKey() {
         super.resignKey()
-        onDismiss()
+        onResignKey()
     }
 }
 
@@ -61,11 +64,17 @@ final class PanelController {
             ShelfView(model: model)
                 .environment(\.managedObjectContext, store.container.viewContext))
         panel.onDismiss = { [weak self] in self?.hide() }
+        panel.onResignKey = { [weak self] in self?.panelResignedKey() }
         return panel
     }()
 
     private var hotKey: GlobalHotKey?
     private var keyMonitor: Any?
+    private var outsideClickMonitor: Any?
+    private var menuObservers: [NSObjectProtocol] = []
+    private var draftObserver: AnyCancellable?
+    /// Context menus are open; losing key to them must not close the shelf.
+    private var openMenus = 0
     private var isShown = false
     /// The app that was frontmost when the panel opened, so focus and the paste go back to it.
     private var previousApp: NSRunningApplication?
@@ -73,6 +82,78 @@ final class PanelController {
     init(store: ClipStore) {
         self.store = store
         model.onCopy = { [weak self] in self?.didCopy() }
+        let center = NotificationCenter.default
+        menuObservers = [
+            center.addObserver(forName: NSMenu.didBeginTrackingNotification, object: nil, queue: .main) { [weak self] _ in
+                MainActor.assumeIsolated { self?.openMenus += 1 }
+            },
+            center.addObserver(forName: NSMenu.didEndTrackingNotification, object: nil, queue: .main) { [weak self] _ in
+                MainActor.assumeIsolated {
+                    guard let self else { return }
+                    self.openMenus = max(0, self.openMenus - 1)
+                    // A menu (e.g. a card's context menu) took key status; give it back so
+                    // whatever the menu opened, like the category name field, gets typing.
+                    if self.openMenus == 0, self.isShown {
+                        DispatchQueue.main.async {
+                            guard self.isShown else { return }
+                            self.panel.makeKey()
+                            if self.model.categoryDraft != nil { self.focusTextField(placeholder: "Category name") }
+                        }
+                    }
+                }
+            },
+        ]
+        // SwiftUI's focus request is lost when the field appears while a context menu
+        // still holds focus (and menu actions run after the menu closes), so focus the
+        // name field directly whenever a draft starts.
+        draftObserver = model.$categoryDraft
+            .map { $0 != nil }
+            .removeDuplicates()
+            .filter { $0 }
+            .sink { [weak self] _ in
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.05) {
+                    self?.focusTextField(placeholder: "Category name")
+                }
+            }
+    }
+
+    private func focusTextField(placeholder: String) {
+        func find(_ view: NSView) -> NSTextField? {
+            if let field = view as? NSTextField, field.isEditable, field.placeholderString == placeholder { return field }
+            return view.subviews.lazy.compactMap(find).first
+        }
+        guard let content = panel.contentView, let field = find(content) else { return }
+        panel.makeFirstResponder(field)
+        field.currentEditor()?.selectedRange = NSRange(location: field.stringValue.count, length: 0)
+    }
+
+    /// Losing key status used to close the shelf, but a context menu or a drag in a
+    /// background app also takes it. Only clicks elsewhere (see the outside-click
+    /// monitor) and losing key with nothing in progress dismiss it.
+    private func panelResignedKey() {
+        guard isShown, openMenus == 0 else { return }
+        if NSEvent.pressedMouseButtons != 0 {
+            // Probably a drag from a card: decide once the button is released.
+            waitForMouseUp()
+            return
+        }
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) { [weak self] in
+            guard let self, self.isShown, self.openMenus == 0, !self.panel.isKeyWindow else { return }
+            self.hide()
+        }
+    }
+
+    private func waitForMouseUp() {
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.2) { [weak self] in
+            guard let self, self.isShown else { return }
+            if NSEvent.pressedMouseButtons != 0 { return self.waitForMouseUp() }
+            // Dropped on the shelf (e.g. a category tab): keep it open and focused.
+            if self.panel.frame.contains(NSEvent.mouseLocation) {
+                self.panel.makeKey()
+            } else if !self.panel.isKeyWindow {
+                self.hide()
+            }
+        }
     }
 
     /// Returns false if the shortcut is taken by another app.
@@ -113,12 +194,21 @@ final class PanelController {
             panel.animator().setFrame(target, display: true)
         }
         installKeyMonitor()
+        // Global mouse monitors need no permission; they only see clicks in other apps.
+        outsideClickMonitor = NSEvent.addGlobalMonitorForEvents(matching: [.leftMouseDown, .rightMouseDown]) { [weak self] _ in
+            MainActor.assumeIsolated {
+                guard let self, self.openMenus == 0 else { return }
+                self.hide()
+            }
+        }
     }
 
     func hide() {
         guard isShown else { return }
         isShown = false
         removeKeyMonitor()
+        if let outsideClickMonitor { NSEvent.removeMonitor(outsideClickMonitor) }
+        outsideClickMonitor = nil
         let frame = panel.frame
         NSAnimationContext.runAnimationGroup({ context in
             context.duration = 0.16
