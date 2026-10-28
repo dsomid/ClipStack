@@ -28,7 +28,7 @@
 | **Global hotkey** | ⇧⌘V opens the shelf over any app, on the screen your mouse is on |
 | **Categories** | Make your own color-coded categories and add any card to one or more of them |
 | **Search and filter** | Search all text, links and file names; filter by Text, Links, Images, Files |
-| **Keyboard first** | ← → to move between cards, Return to paste, type to search, Esc to close |
+| **Keyboard first** | ← → to move between cards, Return to paste, start typing to search, Esc to close |
 | **Click to copy** | Click a card to put it back on the clipboard, or turn on **auto-paste** |
 | **Pin** | Pinned items get their own tab; pinned and categorized items are never cleaned up |
 | **Instant QR Share** | Hover a link or short text and click the QR button to scan it with your phone |
@@ -83,7 +83,8 @@ defaults delete com.omid.clipstack
 | QR code | Hover a link or short-text card and click the QR button in its corner |
 | Close the shelf | **Esc**, or click outside it |
 | Change the shortcut | **Settings… → Show history**, click the shortcut and press new keys |
-| Stop capturing for a while | Click **⏸** in the shelf, or **Pause Capture** in the menu |
+| Search | Just start typing, or click the magnifying glass; the filter button inside narrows by type |
+| Stop capturing for a while | **Pause Capture** in the menu bar menu |
 
 ## Build from source
 

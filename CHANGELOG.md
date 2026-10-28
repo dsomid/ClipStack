@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.2.1
+
+- Cleaner top bar: one centered row with a search icon, Clipboard, your categories as colored dots, and +
+- Start typing anywhere on the shelf to search; Esc clears the search, then closes it
+- Type filter (Text, Links, Images, Files) moved into the search field
+- Pinned tab appears only when something is pinned; Pause and Settings live in the menu bar menu
+- Empty search results say so instead of suggesting you copy something
+
 ## 0.2.0
 
 - New shelf interface: history slides up from the bottom of the screen as a horizontal row of large cards

@@ -19,6 +19,8 @@ final class ShelfModel: ObservableObject {
     /// Non-nil while the inline category name field is showing.
     @Published var categoryDraft: CategoryDraft?
     @Published var focusSearch = 0
+    /// The bar shows a search icon until search is opened by clicking it or typing.
+    @Published var searchActive = false
 
     /// Items currently on screen, in order, for arrow-key navigation.
     var visibleItems: [ClipItem] = []
@@ -41,8 +43,22 @@ final class ShelfModel: ObservableObject {
         selectedIndex = min(max(selectedIndex + delta, 0), visibleItems.count - 1)
     }
 
+    func closeSearch() {
+        search = ""
+        searchActive = false
+        if case .kind = tab { tab = .all }
+    }
+
+    /// Starts a search from a key typed while the shelf has focus.
+    func beginSearch(with characters: String) {
+        searchActive = true
+        search += characters
+        focusSearch += 1
+    }
+
     func reset() {
         search = ""
+        searchActive = false
         selectedIndex = 0
         qrItem = nil
         categoryDraft = nil
@@ -108,44 +124,34 @@ struct ShelfView: View {
 
 // MARK: - Top bar
 
+/// One centered row: search icon, Clipboard, the user's categories, and +.
 private struct ShelfBar: View {
     @ObservedObject var model: ShelfModel
     @Environment(\.managedObjectContext) private var context
     @FetchRequest(sortDescriptors: [SortDescriptor(\ClipCategory.createdAt)])
     private var categories: FetchedResults<ClipCategory>
-    @AppStorage(Prefs.capturePaused) private var paused = false
+    @FetchRequest(sortDescriptors: [], predicate: NSPredicate(format: "isPinned == YES"))
+    private var pinned: FetchedResults<ClipItem>
     @FocusState private var searchFocused: Bool
     @FocusState private var draftFocused: Bool
 
     var body: some View {
-        HStack(spacing: 10) {
-            HStack(spacing: 6) {
-                Image(systemName: "magnifyingglass").foregroundStyle(.secondary)
-                TextField("Search", text: $model.search)
-                    .textFieldStyle(.plain)
-                    .focused($searchFocused)
-                    .frame(width: 160)
-                if !model.search.isEmpty {
-                    Button { model.search = "" } label: { Image(systemName: "xmark.circle.fill") }
-                        .buttonStyle(.plain)
-                        .foregroundStyle(.secondary)
-                }
-            }
-            .padding(.horizontal, 10).padding(.vertical, 6)
-            .background(.quaternary.opacity(0.7), in: Capsule())
-
+        GeometryReader { geometry in
             ScrollView(.horizontal, showsIndicators: false) {
-                HStack(spacing: 6) {
-                    Chip(title: "Clipboard", systemImage: "clock", selected: model.tab == .all) { model.tab = .all }
-                    Chip(title: "Pinned", systemImage: "pin", selected: model.tab == .pinned) { model.tab = .pinned }
-                    kindMenu
-                    Divider().frame(height: 18).padding(.horizontal, 4)
+                HStack(spacing: 4) {
+                    search
+                    Tab(title: "Clipboard", systemImage: "clock.arrow.circlepath", selected: model.tab == .all) {
+                        model.tab = .all
+                    }
+                    if !pinned.isEmpty || model.tab == .pinned {
+                        Tab(title: "Pinned", systemImage: "pin", selected: model.tab == .pinned) { model.tab = .pinned }
+                    }
                     ForEach(categories) { category in
                         if model.categoryDraft?.editing == category {
                             draftField
                         } else {
-                            Chip(title: category.name, color: category.color,
-                                 selected: model.tab == .category(category.objectID)) {
+                            Tab(title: category.name, color: category.color,
+                                selected: model.tab == .category(category.objectID)) {
                                 model.tab = .category(category.objectID)
                             }
                             .contextMenu { categoryMenu(category) }
@@ -154,37 +160,58 @@ private struct ShelfBar: View {
                     if let draft = model.categoryDraft, draft.editing == nil {
                         draftField
                     } else {
-                        Button {
-                            model.categoryDraft = .init()
-                        } label: {
+                        Button { model.categoryDraft = .init() } label: {
                             Image(systemName: "plus")
-                                .frame(width: 26, height: 26)
-                                .background(.quaternary.opacity(0.7), in: Circle())
+                                .font(.system(size: 17, weight: .regular))
+                                .frame(width: 36, height: 34)
+                                .contentShape(Rectangle())
                         }
                         .buttonStyle(.plain)
+                        .foregroundStyle(.secondary)
                         .help("New category")
                     }
                 }
-                .padding(.vertical, 2)
+                .padding(.horizontal, 16)
+                .frame(minWidth: geometry.size.width)
             }
-
-            Toggle(isOn: $paused) { Image(systemName: paused ? "pause.circle.fill" : "pause.circle") }
-                .toggleStyle(.button)
-                .buttonStyle(.plain)
-                .foregroundStyle(paused ? .orange : .secondary)
-                .font(.title3)
-                .help(paused ? "Capture is paused" : "Pause capture")
-            SettingsLink { Image(systemName: "gearshape").font(.title3) }
-                .buttonStyle(.plain)
-                .foregroundStyle(.secondary)
-                .simultaneousGesture(TapGesture().onEnded { NSApp.activate() })
-                .help("Settings")
         }
-        .padding(.horizontal, 16)
-        .padding(.top, 12)
-        .padding(.bottom, 8)
-        .onChange(of: model.focusSearch) { searchFocused = true }
-        .onAppear { searchFocused = true }
+        .frame(height: 50)
+        .padding(.top, 8)
+        .onChange(of: model.searchActive) { searchFocused = model.searchActive }
+        .onChange(of: model.focusSearch) { if model.searchActive { searchFocused = true } }
+    }
+
+    @ViewBuilder
+    private var search: some View {
+        if model.searchActive {
+            HStack(spacing: 6) {
+                Image(systemName: "magnifyingglass").foregroundStyle(.secondary)
+                TextField("Search", text: $model.search)
+                    .textFieldStyle(.plain)
+                    .focused($searchFocused)
+                    .frame(width: 170)
+                kindMenu
+                Button { model.closeSearch() } label: { Image(systemName: "xmark.circle.fill") }
+                    .buttonStyle(.plain)
+                    .foregroundStyle(.secondary)
+            }
+            .font(.system(size: 15))
+            .padding(.horizontal, 12)
+            .frame(height: 34)
+            .background(Color.primary.opacity(0.1), in: RoundedRectangle(cornerRadius: 8))
+            .padding(.trailing, 6)
+        } else {
+            Button { model.searchActive = true } label: {
+                Image(systemName: "magnifyingglass")
+                    .font(.system(size: 17))
+                    .frame(width: 40, height: 34)
+                    .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            .foregroundStyle(.secondary)
+            .help("Search (or just start typing)")
+            .padding(.trailing, 6)
+        }
     }
 
     private var kindMenu: some View {
@@ -192,29 +219,37 @@ private struct ShelfBar: View {
                                                     (.image, "Images", "photo"), (.file, "Files", "doc")]
         let current = kinds.first { model.tab == .kind($0.0) }
         return Menu {
+            Button("All Types") { model.tab = .all }
+            Divider()
             ForEach(kinds, id: \.0) { kind, title, icon in
                 Button { model.tab = .kind(kind) } label: { Label(title, systemImage: icon) }
             }
         } label: {
-            Label(current?.1 ?? "Type", systemImage: current?.2 ?? "line.3.horizontal.decrease")
+            Image(systemName: current?.2 ?? "line.3.horizontal.decrease.circle")
         }
         .menuStyle(.borderlessButton)
+        .menuIndicator(.hidden)
         .fixedSize()
-        .padding(.horizontal, 10).padding(.vertical, 5)
-        .background(current != nil ? Color.accentColor.opacity(0.25) : Color.primary.opacity(0.06), in: Capsule())
+        .foregroundStyle(current != nil ? Color.accentColor : .secondary)
+        .help(current.map { "Showing \($0.1)" } ?? "Filter by type")
     }
 
     private var draftField: some View {
-        TextField("Category name", text: Binding(
-            get: { model.categoryDraft?.name ?? "" },
-            set: { model.categoryDraft?.name = $0 }))
-            .textFieldStyle(.plain)
-            .focused($draftFocused)
-            .frame(width: 130)
-            .padding(.horizontal, 10).padding(.vertical, 5)
-            .background(Capsule().strokeBorder(Color.accentColor, lineWidth: 1.5))
-            .onSubmit { model.commitCategoryDraft(in: context) }
-            .onAppear { draftFocused = true }
+        HStack(spacing: 8) {
+            Circle().fill(Color.secondary).frame(width: 14, height: 14)
+            TextField("Category name", text: Binding(
+                get: { model.categoryDraft?.name ?? "" },
+                set: { model.categoryDraft?.name = $0 }))
+                .textFieldStyle(.plain)
+                .focused($draftFocused)
+                .frame(width: 140)
+                .onSubmit { model.commitCategoryDraft(in: context) }
+                .onAppear { draftFocused = true }
+        }
+        .font(.system(size: 15))
+        .padding(.horizontal, 12)
+        .frame(height: 34)
+        .background(RoundedRectangle(cornerRadius: 8).strokeBorder(Color.accentColor, lineWidth: 1.5))
     }
 
     @ViewBuilder
@@ -238,7 +273,8 @@ private struct ShelfBar: View {
     private static let colorNames = ["Red", "Orange", "Yellow", "Green", "Teal", "Blue", "Purple", "Pink"]
 }
 
-private struct Chip: View {
+/// A plain label with a colored dot or icon; the selected one sits in a rounded highlight.
+private struct Tab: View {
     let title: String
     var systemImage: String?
     var color: Color?
@@ -247,18 +283,20 @@ private struct Chip: View {
 
     var body: some View {
         Button(action: action) {
-            HStack(spacing: 5) {
+            HStack(spacing: 8) {
                 if let color {
-                    Circle().fill(color).frame(width: 8, height: 8)
+                    Circle().fill(color).frame(width: 14, height: 14)
                 } else if let systemImage {
-                    Image(systemName: systemImage).font(.system(size: 11, weight: .semibold))
+                    Image(systemName: systemImage).font(.system(size: 15))
                 }
                 Text(title).lineLimit(1)
             }
-            .font(.system(size: 12, weight: .medium))
-            .padding(.horizontal, 10).padding(.vertical, 5)
-            .background(selected ? (color ?? .accentColor).opacity(0.3) : Color.primary.opacity(0.06), in: Capsule())
-            .contentShape(Capsule())
+            .font(.system(size: 15))
+            .foregroundStyle(Color.primary.opacity(selected ? 1 : 0.85))
+            .padding(.horizontal, 12)
+            .frame(height: 34)
+            .background(selected ? Color.primary.opacity(0.14) : .clear, in: RoundedRectangle(cornerRadius: 8))
+            .contentShape(RoundedRectangle(cornerRadius: 8))
         }
         .buttonStyle(.plain)
     }
@@ -377,7 +415,8 @@ private struct ShelfCards: View {
     }
 
     private var emptyMessage: String {
-        switch model.tab {
+        if !model.search.isEmpty { return "Try a different search." }
+        return switch model.tab {
         case .category: "Right-click any card and choose Category to add it here."
         case .pinned: "Right-click a card and choose Pin."
         default: "Copy something and it will show up here."

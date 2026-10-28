@@ -160,7 +160,7 @@ final class PanelController {
         case 53: // Esc
             if model.qrItem != nil { model.qrItem = nil }
             else if model.categoryDraft != nil { model.categoryDraft = nil }
-            else if !model.search.isEmpty { model.search = "" }
+            else if model.searchActive { model.closeSearch() }
             else { hide() }
             return true
         case _ where model.categoryDraft != nil:
@@ -175,7 +175,14 @@ final class PanelController {
             if let item = model.selectedItem { model.copy(item) }
             return true
         default:
-            return false
+            // Typing anywhere on the shelf opens search with that text.
+            let modifiers = event.modifierFlags.intersection([.command, .control, .option])
+            guard !model.searchActive, modifiers.isEmpty,
+                  let characters = event.characters, !characters.isEmpty,
+                  characters.unicodeScalars.allSatisfy({ !CharacterSet.controlCharacters.contains($0) && $0.value < 0xF700 })
+            else { return false }
+            model.beginSearch(with: characters)
+            return true
         }
     }
 }
