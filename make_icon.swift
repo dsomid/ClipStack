@@ -1,9 +1,11 @@
 // Renders the ClipStack app icon into an .iconset folder.
 // Usage: swift make_icon.swift <output.iconset> && iconutil -c icns <output.iconset> -o AppIcon.icns
+//        swift make_icon.swift --ios <output.png>   (1024px full-bleed square; iOS rounds the corners)
 import AppKit
 
-let out = CommandLine.arguments[1]
-try? FileManager.default.createDirectory(atPath: out, withIntermediateDirectories: true)
+let ios = CommandLine.arguments[1] == "--ios"
+let out = CommandLine.arguments.last!
+if !ios { try? FileManager.default.createDirectory(atPath: out, withIntermediateDirectories: true) }
 
 func render(_ px: Int) -> Data {
     let rep = NSBitmapImageRep(bitmapDataPlanes: nil, pixelsWide: px, pixelsHigh: px, bitsPerSample: 8,
@@ -14,8 +16,9 @@ func render(_ px: Int) -> Data {
     let s = CGFloat(px) / 1024
 
     // Rounded-square background with a teal→green gradient.
-    let bg = NSRect(x: 100 * s, y: 100 * s, width: 824 * s, height: 824 * s)
-    let squircle = NSBezierPath(roundedRect: bg, xRadius: 185 * s, yRadius: 185 * s)
+    let bg = ios ? NSRect(x: 0, y: 0, width: 1024 * s, height: 1024 * s)
+                 : NSRect(x: 100 * s, y: 100 * s, width: 824 * s, height: 824 * s)
+    let squircle = ios ? NSBezierPath(rect: bg) : NSBezierPath(roundedRect: bg, xRadius: 185 * s, yRadius: 185 * s)
     NSGradient(colors: [NSColor(red: 0.05, green: 0.62, blue: 0.72, alpha: 1),
                         NSColor(red: 0.18, green: 0.80, blue: 0.52, alpha: 1)])!.draw(in: squircle, angle: -60)
 
@@ -48,6 +51,11 @@ func render(_ px: Int) -> Data {
 
     NSGraphicsContext.restoreGraphicsState()
     return rep.representation(using: .png, properties: [:])!
+}
+
+if ios {
+    try! render(1024).write(to: URL(fileURLWithPath: out))
+    exit(0)
 }
 
 for size in [16, 32, 128, 256, 512] {

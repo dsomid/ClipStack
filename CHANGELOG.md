@@ -6,6 +6,7 @@
 - Click a category's dot to change its color from swatches
 - Fixed: dragging a screenshot or file card onto a category didn't add it
 - Existing history is migrated automatically to store card names
+- New: iPhone and iPad app, as an unsigned IPA (save with Paste, cards, categories, rename, search, share)
 
 ## 0.2.2
 

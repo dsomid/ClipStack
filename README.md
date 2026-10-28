@@ -5,13 +5,14 @@
 <h1 align="center">ClipStack</h1>
 
 <p align="center">
-  A visual clipboard history for macOS that lives in your menu bar.<br>
+  A visual clipboard history for macOS that lives in your menu bar, with a companion app for iPhone and iPad.<br>
   Press ⇧⌘V and everything you copy slides up from the bottom of the screen as cards you can search, sort into categories, paste back, or beam to your phone as a QR code.
 </p>
 
 <p align="center">
   <a href="https://github.com/dsomid/ClipStack/releases/latest"><img src="https://img.shields.io/github/v/release/dsomid/ClipStack" alt="Latest release"></a>
   <img src="https://img.shields.io/badge/macOS-14%2B-blue" alt="macOS 14+">
+  <img src="https://img.shields.io/badge/iOS-17%2B-blue" alt="iOS 17+">
   <a href="CHANGELOG.md"><img src="https://img.shields.io/badge/changelog-read-green" alt="Changelog"></a>
 </p>
 
@@ -43,6 +44,8 @@
 
 ## Install
 
+### Mac
+
 Requires macOS 14 Sonoma or later. Runs natively on Apple silicon and Intel.
 
 1. Download **`ClipStack-<version>.dmg`** from the [latest release](https://github.com/dsomid/ClipStack/releases/latest).
@@ -70,6 +73,14 @@ rm -rf ~/Library/Application\ Support/ClipStack
 defaults delete com.omid.clipstack
 ```
 
+### iPhone and iPad
+
+Download **`ClipStack-<version>.ipa`** from the [latest release](https://github.com/dsomid/ClipStack/releases/latest). It's **unsigned**, so sign and install it with your own tool (for example a signing service, AltStore or Sideloadly). Requires iOS 17 or later.
+
+iOS doesn't let apps read the clipboard in the background, so the iPhone app saves what you've copied when you tap **Paste** (a banner offers it when something new is on the clipboard). Tap a card to copy it; long-press for Share, Rename, Pin, Category and Delete. Categories, names and search work as on the Mac.
+
+The IPA keeps its own history. To sync with the Mac app, the signing profile must include the iCloud container `iCloud.com.omid.clipstack`, and the IPA must be built with `CLOUDKIT=1 ./build-ios.sh`.
+
 ## Usage
 
 | Action | How |
@@ -91,7 +102,7 @@ defaults delete com.omid.clipstack
 
 ## Build from source
 
-Needs only the Xcode Command Line Tools (`xcode-select --install`); no Xcode project.
+No Xcode project. The Mac app needs only the Command Line Tools (`xcode-select --install`); the iOS app needs Xcode. Code shared by both lives in `Sources/Shared`.
 
 ```bash
 git clone https://github.com/dsomid/ClipStack.git
@@ -99,7 +110,7 @@ cd ClipStack
 ./build.sh
 ```
 
-This produces `build/ClipStack.app` (universal) and `build/ClipStack-<version>.dmg`. To redraw the icon, run `swift make_icon.swift AppIcon.iconset && iconutil -c icns AppIcon.iconset -o AppIcon.icns`.
+This produces `build/ClipStack.app` (universal) and `build/ClipStack-<version>.dmg`. `./build-ios.sh` produces an unsigned `build/ClipStack-<version>.ipa`. To redraw the icon, run `swift make_icon.swift AppIcon.iconset && iconutil -c icns AppIcon.iconset -o AppIcon.icns`.
 
 `build.sh` has optional signing modes, all set by environment variables:
 

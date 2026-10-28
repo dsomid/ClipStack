@@ -9,7 +9,7 @@ rm -rf build && mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources"
 for arch in arm64 x86_64; do
   swiftc -O -swift-version 5 -parse-as-library -target $arch-apple-macos14.0 \
     -framework AppKit -framework SwiftUI -framework CoreData -framework CryptoKit -framework ImageIO -framework Carbon -framework ServiceManagement -framework ApplicationServices -framework CoreImage \
-    Sources/*.swift -o build/ClipStack-$arch
+    Sources/Shared/*.swift Sources/macOS/*.swift -o build/ClipStack-$arch
 done
 lipo -create build/ClipStack-arm64 build/ClipStack-x86_64 -output "$APP/Contents/MacOS/ClipStack"
 rm build/ClipStack-arm64 build/ClipStack-x86_64
